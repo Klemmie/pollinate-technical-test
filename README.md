@@ -88,7 +88,8 @@ and a virtual network link. Finally, a list of ACR's is pulled so that the SP ca
 is done for all ACR's since there might be an ACR for each environment, although that might be excessive.
 
 Lastly the Pipeline automates this entire process flow. It starts with building the Spring jar, and passes the jar over
-to the Dockerbuild job where the container is built and pushed to ACR. The Terraform stage runs the init, plan and apply 
+to the Dockerbuild job where the container is built. It is then scanned using Trivy, and if there are no HIGH or CRITICAL
+vulnerabilities found, it is pushed to ACR. The Terraform stage runs the init, plan and apply 
 outlined in the paragraphs above. Finally, it deploys the container created in the App stage to the CA created in Terraform
 stage. 
 
