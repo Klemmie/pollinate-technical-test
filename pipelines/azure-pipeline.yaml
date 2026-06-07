@@ -52,11 +52,6 @@ stages:
             inputs:
               key: 'maven | "$(Agent.OS)" | **/pom.xml'
 
-#          - bash: |
-#              sudo apt update
-#              sudo apt install -y temurin-25-jdk
-#            displayName: Installing prerequisites
-
           - task: Maven@4
             displayName: Run tests
             inputs:
@@ -217,7 +212,7 @@ stages:
               command: 'apply'
               workingDirectory: $(TF_WORKING_DIR)
               environmentServiceNameAzureRM: $(AZURE_SERVICE_CONNECTION)
-              commandOptions: -auto-approve tfplan-$(environment)
+              commandOptions: -lock=false -auto-approve tfplan-$(environment)
 
   - stage: Deploy
     displayName: Deploy to Container Apps
