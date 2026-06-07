@@ -30,6 +30,7 @@ of the restrictive CI/CD structure this bootstrapping has to be done using click
     2. `ARM_CLIENT_SECRET`: `pollinate-sp-client-secret-in-clipboard`
     3. `ARM_SUBSCRIPTION_ID`: `azure-subscription-id`
     4. `ARM_TENANT_ID`: `azure-tenant-id`
+13. Create 2 environments named `dev` and `prd` and add approvals to the `prd` environment
 
 Once all this is done then the Azure pipeline can be run, this will:
 1. Build the Spring application
@@ -138,3 +139,10 @@ flowchart TD
     C -.->|"deploys"| K
     F -.->|"reads API key"| H
 ```
+
+### Closing
+This was a very nice technical assessment. I really enjoyed building this, it's been a while since I've worked with Java
+so this was a nice throw-back to my early career.
+
+If you have any difficulties deploying this application in your environment please don't hesitate to reach out (ruaanmk@gmail.com).
+I have tested and run this in my personal Azure subscription, and it does work, even if it requires a little back and forth.
