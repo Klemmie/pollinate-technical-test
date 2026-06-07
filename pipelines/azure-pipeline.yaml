@@ -1,0 +1,283 @@
+trigger:
+   branches:
+     include:
+       - main
+       - develop
+
+variables:
+  - group: General
+  - name: MAVEN_CACHE_FOLDER
+    value: $(Pipeline.Workspace)/.m2/repository
+  - name: MAVEN_OPTS
+    value: -Dmaven.repo.local=$(MAVEN_CACHE_FOLDER)
+  - name: IMAGE_NAME
+    value: acrpollinatetechnical.azurecr.io/pollinate/risk-validation-app
+  - name: ACR_NAME
+    value: acrpollinatetechnical
+  - name: AZURE_SERVICE_CONNECTION
+    value: pollinate-technical-service-connection
+  - name: AZURE_ACR_SERVICE_CONNECTION
+    value: pollinate-technical-service-connection
+  - name: IMAGE_TAG
+    value: 0.0.1 # Pinning this to reduce complexity
+  - name: RESOURCE_GROUP
+    value: rg-pollinate-technical
+  - name: CONTAINER_APP_NAME
+    value: ca-pollinate-technical
+  - name: CONTAINER_APP_ENV
+    value: cae-pollinate-technical
+  - name: TERRAFORM_STORAGE_ACCOUNT_NAME
+    value: sapollinate
+  - name: TERRAFORM_CONTAINER_NAME
+    value: pollinate-state
+  - name: TERRAFORM_STATE_KEY
+    value: pollinate.tfstate
+  - name: TERRAFORM_STORAGE_ACCOUNT_RESOURCE_GROUP
+    value: rg-pollinate-platform-dev
+  - name: TF_WORKING_DIR
+    value: terraform
+
+stages:
+  - stage: Build
+    displayName: Test & Build
+    jobs:
+      - job: MavenBuild
+        displayName: Run Tests & Package JAR
+        pool:
+          vmImage: 'ubuntu-latest'
+
+        steps:
+          - task: Cache@2
+            displayName: Cache Maven dependencies
+            inputs:
+              key: 'maven | "$(Agent.OS)" | **/pom.xml'
+
+#          - bash: |
+#              sudo apt update
+#              sudo apt install -y temurin-25-jdk
+#            displayName: Installing prerequisites
+
+          - task: Maven@4
+            displayName: Run tests
+            inputs:
+              jdkVersionOption: 1.25
+              mavenPomFile: pom.xml
+              goals: test
+              options: $(MAVEN_OPTS)
+              publishJUnitResults: true
+              testResultsFiles: '**/surefire-reports/TEST-*.xml'
+
+          - task: Maven@4
+            displayName: Build JAR
+            inputs:
+              jdkVersionOption: 1.25
+              mavenPomFile: pom.xml
+              goals: package
+              options: $(MAVEN_OPTS) -DskipTests
+              publishJUnitResults: false
+
+          - publish: $(System.DefaultWorkingDirectory)/target
+            artifact: jar-artifact
+            displayName: Publish JAR artifact
+
+      - job: DockerScan
+        displayName: Build, Scan & Push Image
+        dependsOn: MavenBuild
+        pool:
+          vmImage: 'ubuntu-latest'
+
+        steps:
+          - download: current
+            artifact: jar-artifact
+            displayName: Download JAR artifact
+
+          - bash: |
+              mkdir -p target
+              cp $(Pipeline.Workspace)/jar-artifact/*.jar target/
+            displayName: Restore JAR to target/
+
+          - task: Docker@2
+            displayName: Build Docker image
+            inputs:
+              command: build
+              repository: $(IMAGE_NAME)
+              tags: $(IMAGE_TAG)
+              arguments: --no-cache
+
+          - bash: |
+              curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+              trivy image \
+                --exit-code 0 \
+                --severity LOW,MEDIUM \
+                --format table \
+                $(IMAGE_NAME):$(IMAGE_TAG)
+
+              trivy image \
+                --exit-code 1 \
+                --severity HIGH,CRITICAL \
+                --ignore-unfixed \
+                --format table \
+                $(IMAGE_NAME):$(IMAGE_TAG)
+            displayName: Scan image with Trivy
+
+          - bash: |
+              trivy image \
+                --exit-code 0 \
+                --format template \
+                --output trivy-results.xml \
+                $(IMAGE_NAME):$(IMAGE_TAG)
+            displayName: Export Trivy results
+            condition: always()
+
+          - task: PublishTestResults@2
+            displayName: Publish Trivy scan results
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: trivy-results.xml
+              testRunTitle: Trivy Security Scan
+#
+#          - task: AzureCLI@2
+#            displayName: Login to ACR & Push image
+#            inputs:
+#              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+#              scriptType: bash
+#              scriptLocation: inlineScript
+#              inlineScript: |
+#                az acr login --name $(ACR_NAME)
+#
+#                docker tag $(IMAGE_NAME):$(IMAGE_TAG) $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(IMAGE_TAG)
+#                docker tag $(IMAGE_NAME):$(IMAGE_TAG) $(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest
+#
+#                docker push $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(IMAGE_TAG)
+#                docker push $(ACR_NAME).azurecr.io/$(IMAGE_NAME):latest
+
+  - stage: Infrastructure
+    displayName: Terraform Infrastructure
+    jobs:
+      - job: WaitForApproval
+        pool: server
+        steps:
+          - task: ManualValidation@1
+            timeoutInMinutes: 60
+            inputs:
+              notifyUsers: 'ruaan.pollinate@outlook.com'
+              instructions: 'Please approve the Terraform pipeline.'
+              onTimeout: 'reject'
+
+      - job: Terraform
+        displayName: Plan & Apply Terraform
+        pool:
+          vmImage: 'ubuntu-latest'
+        dependsOn: WaitForApproval
+        steps:
+
+          - task: TerraformInstaller@1
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: 'latest'
+
+          - task: TerraformTask@5
+            env:
+              TF_WORKSPACE: $(environment)
+            displayName: Terraform Init
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              backendServiceArm: $(AZURE_SERVICE_CONNECTION)
+              backendAzureRmResourceGroupName: $(TERRAFORM_STORAGE_ACCOUNT_RESOURCE_GROUP)
+              backendAzureRmStorageAccountName: $(TERRAFORM_STORAGE_ACCOUNT_NAME)
+              backendAzureRmContainerName: $(TERRAFORM_CONTAINER_NAME)
+              backendAzureRmKey: $(TERRAFORM_STATE_KEY)
+              backendAzureRmUseCliFlagsForAuthentication: true
+              workingDirectory: $(TF_WORKING_DIR)
+
+          - task: TerraformTask@5
+            env:
+              TF_WORKSPACE: $(environment)
+            displayName: Terraform Plan
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'
+              workingDirectory: $(TF_WORKING_DIR)
+              environmentServiceNameAzureRM: $(AZURE_SERVICE_CONNECTION)
+              commandOptions: -var-file=variables-$(environment).tfvars -lock=false -out=tfplan-$(environment)
+
+          - publish: $(TF_WORKING_DIR)/tfplan-$(environment)
+            artifact: tfplan-$(environment)
+            displayName: Publish Terraform plan
+
+          - task: TerraformTask@5
+            env:
+              TF_WORKSPACE: $(environment)
+            displayName: Terraform Apply
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'
+              workingDirectory: $(TF_WORKING_DIR)
+              environmentServiceNameAzureRM: $(AZURE_SERVICE_CONNECTION)
+              commandOptions: -auto-approve tfplan-$(environment)
+
+  - stage: Deploy
+    displayName: Deploy to Container Apps
+    dependsOn: Infrastructure
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployToContainerApp
+        displayName: Deploy to Azure Container App
+        pool:
+          vmImage: 'ubuntu-latest'
+        environment: $(environment)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: Deploy to Azure Container App
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      echo "Deploying image: $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(IMAGE_TAG)"
+                      
+                      az containerapp update \
+                        --name $(CONTAINER_APP_NAME) \
+                        --resource-group $(RESOURCE_GROUP)-$(environment) \
+                        --image $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(IMAGE_TAG)
+
+                - task: AzureCLI@2
+                  displayName: Verify deployment health
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      echo "Checking container app provisioning state..."
+                      
+                      for i in {1..10}; do
+                        STATE=$(az containerapp show \
+                          --name $(CONTAINER_APP_NAME) \
+                          --resource-group $(RESOURCE_GROUP)-$(environment) \
+                          --query "properties.provisioningState" -o tsv)
+                      
+                        echo "Attempt $i — Provisioning state: $STATE"
+                      
+                        if [ "$STATE" == "Succeeded" ]; then
+                          echo "Deployment succeeded!"
+                          break
+                        elif [ "$STATE" == "Failed" ]; then
+                          echo "Deployment failed!"
+                          exit 1
+                        fi
+                      
+                        sleep 10
+                      done
+                      
+                      FQDN=$(az containerapp show \
+                        --name $(CONTAINER_APP_NAME) \
+                        --resource-group $(RESOURCE_GROUP)-$(environment) \
+                        --query "properties.configuration.ingress.fqdn" -o tsv)
+                      
+                      echo "App is live at: https://$FQDN"
