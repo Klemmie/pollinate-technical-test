@@ -46,7 +46,8 @@ As discussed earlier in this README, I had to bootstrap some Azure resources to 
 specifically the ordering of the CI/CD pipeline
 
 I also opted for wider permissions for the Service Principle and Service Connection purely for the sake of complexity. 
-Given the time constraint of this technical assessment I felt that giving the SP and SC wider permissions is acceptable for PoC purposes. If this were to be productionized I'd review the assigned roles to strip it down to only what is strictly speaking required.
+Given the time constraint of this technical assessment I felt that giving the SP and SC wider permissions is acceptable
+for PoC purposes. If this were to be productionized I'd review the assigned roles to strip it down to only what is strictly speaking required.
 
 I also opted to not use https connections in the application since I'd have to issue a TLS certificate and have 
 it signed by an appropriate CA which in real world environments aren't done from a local laptop but rather through 
@@ -66,7 +67,9 @@ The code architecture I feel is fairly simple to follow. There's a controller th
 which is deserialized into a Java object (Data Transfer Object or DTO). This DTO is then used to call a downstream service 
 in the service class. The response from the downstream call is hardcoded since the API doesn't actually exist, or at least
 not in the form it was provided. The API key is pulled from AKV and provided as an environment variable to the container
-where Spring picks it up and uses it in the API call.
+where Spring picks it up and uses it in the API call. There is a generic and specific error handler to deal with downstream
+API outages as well anything internally going wrong. I also leveraged the OpenTelemetry dependency to facilitate CorrelationID
+tracking of requests. All of this logged out with an appropriate formatting to make any debugging or error checking easier
 
 The Terraform architecture should also be pretty self-explanatory. In a true production setup I would create modules, but 
 since the technical assessment required all the Terraform to be in a single directory it mixes traditional infrastructure setup
